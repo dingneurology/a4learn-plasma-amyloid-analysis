@@ -1,11 +1,14 @@
-# a4learn-plasma-amyloid-analysis
-├─ README.md
-├─ scripts/
-│  ├─ 00_packages.R
-│  ├─ 01_data_prep_impute.R
-│  ├─ 02_feature_engineering.R
-│  ├─ 03_descriptive_analysis.R
-│  ├─ 04_single_marker_roc.R
-│  ├─ 05_combined_model.R
-│  └─ 06_figures_and_forestplot.R
-└─ output/
+# A4/LEARN plasma biomarker analysis
+
+This repository contains analysis scripts for the study of plasma biomarkers and amyloid PET positivity in cognitively unimpaired adults from the A4/LEARN cohort.
+
+## Contents
+- data preparation and imputation
+- biomarker feature construction
+- descriptive analysis
+- ROC analysis
+- combined model analysis
+- figure generation
+
+## Note
+The original A4/LEARN data are controlled-access and are not included in this repository.
