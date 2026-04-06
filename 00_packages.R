@@ -1,0 +1,12 @@
+# Core packages
+library(tidyverse)
+library(mice)
+library(pROC)
+library(glmnet)
+library(gghalves)
+library(ggprism)
+library(effectsize)
+library(broom)
+library(forestplot)
+library(grid)
+library(table1)
