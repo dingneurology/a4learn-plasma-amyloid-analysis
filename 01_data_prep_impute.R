@@ -23,9 +23,15 @@ all_data <- demo %>%
   inner_join(ptau217, by = "BID")
 
 # Data for imputation
-imp_data <- all_data %>%
-  select(SUBSTUDY, BID, AGEYR, SEX, RACE, EDCCNTU, ETHNIC,
-         APOE4_positive, pmod_suvr, GFAP, AMYLB40, AMYLB42, TPP181, ORRESRAW) %>%
+analysis_data <- all_data %>%
+  filter(!is.na(pmod_suvr), !is.na(ORRESRAW))
+imp_data <- analysis_data %>%
+  select(
+    SUBSTUDY, BID,
+    AGEYR, SEX, RACE, EDCCNTU, ETHNIC,
+    APOE4_positive,  
+    AMYLB40, AMYLB42, TPP181,
+  ) %>%
   mutate(
     SUBSTUDY = as.factor(SUBSTUDY),
     BID = as.factor(BID),
@@ -35,23 +41,21 @@ imp_data <- all_data %>%
     APOE4_positive = as.factor(APOE4_positive)
   )
 
-# Initialize mice
 ini <- mice(imp_data, maxit = 0, printFlag = FALSE)
 meth <- ini$method
 pred <- ini$predictorMatrix
 
-# Do not impute IDs
 meth["BID"] <- ""
 meth["SUBSTUDY"] <- ""
+
+meth["pmod_suvr"] <- ""
+meth["ORRESRAW"] <- ""
+
 pred[, c("BID", "SUBSTUDY")] <- 0
 pred[c("BID", "SUBSTUDY"), ] <- 0
 
-# Methods by variable type
-meth[c("AGEYR", "EDCCNTU", "pmod_suvr","AMYLB40", "AMYLB42", "TPP181", "ORRESRAW")] <- "pmm"
-meth[c("SEX", "APOE4_positive", "ETHNIC")] <- "logreg"
-meth["RACE"] <- "polyreg"
+meth[c("AGEYR", "EDCCNTU", "AMYLB40", "AMYLB42", "TPP181")] <- "pmm"
 
-# Run imputation
 set.seed(123)
 imp <- mice(
   imp_data,
@@ -61,7 +65,5 @@ imp <- mice(
   maxit = 20,
   printFlag = TRUE
 )
-
 complete_data <- complete(imp, 1)
-
-write_csv(complete_data, "output/complete_data.csv")
+write_csv(complete_data, "complete_data_no_impute_pet_ptau217.csv")
