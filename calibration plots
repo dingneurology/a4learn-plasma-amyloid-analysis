@@ -1,0 +1,94 @@
+library(tidyverse)
+
+# -----------------------------
+# 1. 准备结局变量
+# -----------------------------
+all_data <- all_data %>%
+  mutate(
+    ab_status = ifelse(group %in% c("positive", 1, "Aβ+"), 1, 0)
+  )
+
+# -----------------------------
+# 2. 拟合两个模型
+# -----------------------------
+# Combined model
+fit_combined <- glm(
+  ab_status ~ AGEYR + SEX + APOE4_positive + log_ORRESRAW + log_TPP181 + log_AMYLB42,
+  data = all_data,
+  family = binomial(link = "logit")
+)
+
+# Covariate-adjusted p-tau217 model
+fit_ptau217 <- glm(
+  ab_status ~ AGEYR + SEX + APOE4_positive + log_ORRESRAW,
+  data = all_data,
+  family = binomial(link = "logit")
+)
+
+# 预测概率
+all_data <- all_data %>%
+  mutate(
+    pred_combined = predict(fit_combined, type = "response"),
+    pred_ptau217  = predict(fit_ptau217, type = "response")
+  )
+
+# -----------------------------
+# 3. 定义 calibration plot 函数
+# -----------------------------
+make_calibration_data <- function(data, pred_var, outcome_var = "ab_status", n_bins = 10) {
+  data %>%
+    filter(!is.na(.data[[pred_var]]), !is.na(.data[[outcome_var]])) %>%
+    mutate(
+      bin = ntile(.data[[pred_var]], n_bins)
+    ) %>%
+    group_by(bin) %>%
+    summarise(
+      mean_pred = mean(.data[[pred_var]], na.rm = TRUE),
+      obs_rate  = mean(.data[[outcome_var]], na.rm = TRUE),
+      n = n(),
+      .groups = "drop"
+    )
+}
+
+plot_calibration <- function(cal_data, title_text) {
+  ggplot(cal_data, aes(x = mean_pred, y = obs_rate)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+    geom_point(size = 3, color = "#D55E00") +
+    geom_line(linewidth = 0.8, color = "#D55E00") +
+    coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +
+    labs(
+      x = "Mean predicted probability",
+      y = "Observed proportion of Aβ PET positivity",
+      title = title_text
+    ) +
+    theme_classic(base_size = 14)
+}
+
+# -----------------------------
+# 4. 生成校准数据
+# -----------------------------
+cal_combined <- make_calibration_data(all_data, "pred_combined", n_bins = 10)
+cal_ptau217  <- make_calibration_data(all_data, "pred_ptau217",  n_bins = 10)
+
+# -----------------------------
+# 5. 绘图
+# -----------------------------
+p_cal_combined <- plot_calibration(
+  cal_combined,
+  "Calibration plot: Combined model"
+)
+
+p_cal_ptau217 <- plot_calibration(
+  cal_ptau217,
+  "Calibration plot: Covariate-adjusted plasma p-tau217 model"
+)
+
+# 查看图
+p_cal_combined
+p_cal_ptau217
+
+# -----------------------------
+# 6. 保存图片
+# -----------------------------
+ggsave("output/calibration_combined_model.png", p_cal_combined, width = 6, height = 6, dpi = 300)
+ggsave("output/calibration_ptau217_model.png", p_cal_ptau217, width = 6, height = 6, dpi = 300)
