@@ -1,0 +1,418 @@
+#========================================
+# HABS-HD replication: continuous PET burden analysis
+# Main continuous outcome: Global_FBB_SUVR
+#========================================
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(broom)
+library(patchwork)
+
+rm(list = ls())
+
+#----------------------------------------
+# 1. 读取数据
+#----------------------------------------
+clinical  <- read_csv("*****_Clinical.csv", show_col_types = FALSE)
+biomarker <- read_csv("*****_Biomarkers.csv", show_col_types = FALSE)
+abpet     <- read_csv("*****abpet.csv", show_col_types = FALSE)
+genomics  <- read_csv("*****Genomics.csv", show_col_types = FALSE)
+
+#----------------------------------------
+# 2. 缺失值编码
+#----------------------------------------
+na_codes <- c(-777777, -999999, -99999, -9999, -999, -99, "")
+
+#----------------------------------------
+# 3. 提取临床变量
+#----------------------------------------
+clinical_sub <- clinical %>%
+  select(
+    Med_ID,
+    Visit_ID,
+    Age,
+    ID_Gender,
+    Ethnicity,
+    ID_Education,
+    CDR_Global,
+    CDR_Sum,
+    MMSE_Total
+  ) %>%
+  mutate(across(everything(), ~ ifelse(. %in% na_codes, NA, .)))
+
+#----------------------------------------
+# 4. 提取血浆 biomarker
+#----------------------------------------
+biomarker_sub <- biomarker %>%
+  select(
+    Med_ID,
+    Visit_ID,
+    Age,
+    ID_Gender,
+    Ethnicity,
+    ID_Education,
+    r7_QTX_Plasma_Abeta40,
+    r7_QTX_Plasma_Abeta42,
+    r7_QTX_Plasma_pTau181_V2_1,
+    r7_QTX_Plasma_pTau217_V2,
+    r7_QTX_Plasma_GFAP,
+    r7_QTX_Plasma_NfL_V2
+  ) %>%
+  mutate(across(everything(), ~ ifelse(. %in% na_codes, NA, .)))
+
+#----------------------------------------
+# 5. 提取 PET 变量
+#   主分析连续变量：Global_FBB_SUVR
+#   分组变量：AB_pos_FBB
+#   敏感性分析变量：Centiloid_Units_GlobalAmyloid
+#----------------------------------------
+abpet_sub <- abpet %>%
+  select(
+    Med_ID,
+    AB_pos_FBB,
+    Global_FBB_SUVR,
+    Centiloid_Units_GlobalAmyloid
+  ) %>%
+  mutate(across(everything(), ~ ifelse(. %in% na_codes, NA, .)))
+
+#----------------------------------------
+# 6. 提取 APOE 变量
+#----------------------------------------
+genomics_sub <- genomics %>%
+  select(
+    Med_ID,
+    Visit_ID,
+    APOE4_Genotype,
+    APOE4_Positivity
+  ) %>%
+  mutate(across(everything(), ~ ifelse(. %in% na_codes, NA, .))) %>%
+  arrange(Med_ID, Visit_ID) %>%
+  group_by(Med_ID) %>%
+  slice(1) %>%
+  ungroup()
+
+#----------------------------------------
+# 7. 合并数据
+#----------------------------------------
+dat <- biomarker_sub %>%
+  left_join(
+    clinical_sub %>%
+      select(Med_ID, Visit_ID, CDR_Global, CDR_Sum, MMSE_Total),
+    by = c("Med_ID", "Visit_ID")
+  ) %>%
+  left_join(abpet_sub, by = "Med_ID") %>%
+  left_join(
+    genomics_sub %>% select(Med_ID, APOE4_Genotype, APOE4_Positivity),
+    by = "Med_ID"
+  )
+
+#----------------------------------------
+# 8. 重命名
+#----------------------------------------
+dat <- dat %>%
+  rename(
+    sex = ID_Gender,
+    education = ID_Education,
+    abeta40 = r7_QTX_Plasma_Abeta40,
+    abeta42 = r7_QTX_Plasma_Abeta42,
+    ptau181 = r7_QTX_Plasma_pTau181_V2_1,
+    ptau217 = r7_QTX_Plasma_pTau217_V2,
+    gfap = r7_QTX_Plasma_GFAP,
+    nfl = r7_QTX_Plasma_NfL_V2,
+    amyloid_status = AB_pos_FBB,
+    amyloid_suvr = Global_FBB_SUVR,
+    amyloid_cl = Centiloid_Units_GlobalAmyloid,
+    apoe_genotype = APOE4_Genotype,
+    apoe4_status = APOE4_Positivity
+  )
+
+#----------------------------------------
+# 9. 统一编码
+#----------------------------------------
+dat <- dat %>%
+  mutate(
+    amyloid_status = case_when(
+      amyloid_status %in% c(1, "1", "Positive", "POS", "Aβ+", "AB+") ~ 1,
+      amyloid_status %in% c(0, "0", "Negative", "NEG", "Aβ-", "AB-") ~ 0,
+      TRUE ~ suppressWarnings(as.numeric(amyloid_status))
+    ),
+    apoe4_status = case_when(
+      apoe4_status %in% c(1, "1", "Positive", "POS", "Carrier", "E4+") ~ 1,
+      apoe4_status %in% c(0, "0", "Negative", "NEG", "Non-carrier", "E4-") ~ 0,
+      TRUE ~ suppressWarnings(as.numeric(apoe4_status))
+    ),
+    amyloid_suvr = suppressWarnings(as.numeric(amyloid_suvr)),
+    amyloid_cl   = suppressWarnings(as.numeric(amyloid_cl)),
+    Age = suppressWarnings(as.numeric(Age)),
+    education = suppressWarnings(as.numeric(education))
+  )
+
+#----------------------------------------
+# 10. 去除主分析核心变量缺失
+#   这里把 amyloid_suvr 一起纳入
+#----------------------------------------
+analysis_clean <- dat %>%
+  drop_na(
+    Med_ID,
+    ptau217,
+    ptau181,
+    abeta42,
+    abeta40,
+    Age,
+    sex,
+    apoe4_status,
+    amyloid_status,
+    amyloid_suvr
+  ) %>%
+  mutate(
+    amyloid_group = ifelse(amyloid_status == 1, "Aβ+", "Aβ-"),
+    apoe4_group   = ifelse(apoe4_status == 1, "APOE ε4+", "APOE ε4-")
+  )
+
+#----------------------------------------
+# 11. 构建比值和 log 变量
+#   与手稿一致：ratio 先用原始值计算，再 log10
+#----------------------------------------
+analysis_dat <- analysis_clean %>%
+  mutate(
+    ratio_abeta42_40    = abeta42 / abeta40,
+    ratio_ptau181_ab42  = ptau181 / abeta42,
+    ratio_ptau217_ab42  = ptau217 / abeta42
+  ) %>%
+  mutate(
+    log_abeta42            = log10(abeta42),
+    log_abeta40            = log10(abeta40),
+    log_ptau181            = log10(ptau181),
+    log_ptau217            = log10(ptau217),
+    log_ratio_abeta42_40   = log10(ratio_abeta42_40),
+    log_ratio_ptau181_ab42 = log10(ratio_ptau181_ab42),
+    log_ratio_ptau217_ab42 = log10(ratio_ptau217_ab42)
+  ) %>%
+  filter(
+    is.finite(log_abeta42),
+    is.finite(log_abeta40),
+    is.finite(log_ptau181),
+    is.finite(log_ptau217),
+    is.finite(log_ratio_abeta42_40),
+    is.finite(log_ratio_ptau181_ab42),
+    is.finite(log_ratio_ptau217_ab42)
+  ) %>%
+  mutate(
+    amyloid_status = as.integer(amyloid_status),
+    amyloid_group = factor(amyloid_group, levels = c("Aβ-", "Aβ+")),
+    sex = factor(sex),
+    apoe4_status = as.integer(apoe4_status)
+  )
+
+cat("Final analysis sample:", nrow(analysis_dat), "\n")
+cat("Amyloid group counts:\n")
+print(table(analysis_dat$amyloid_group))
+
+# 保存分析表
+write_csv(analysis_dat, "HABS_HD_analysis_dat_with_SUVR.csv")
+
+#========================================
+# 12. 连续 PET burden 分析（Figure 2）
+#   outcome = amyloid_suvr
+#========================================
+
+all_data <- analysis_dat
+
+suvr_model_specs <- list(
+  "log(Aβ42)" =
+    amyloid_suvr ~ log_abeta42 + Age + sex + apoe4_status,
+  
+  "log(Aβ42/40)" =
+    amyloid_suvr ~ log_ratio_abeta42_40 + Age + sex + apoe4_status,
+  
+  "log(p-tau181)" =
+    amyloid_suvr ~ log_ptau181 + Age + sex + apoe4_status,
+  
+  "log(p-tau181/Aβ42)" =
+    amyloid_suvr ~ log_ratio_ptau181_ab42 + Age + sex + apoe4_status,
+  
+  "log(p-tau217)" =
+    amyloid_suvr ~ log_ptau217 + Age + sex + apoe4_status,
+  
+  "log(p-tau217/Aβ42)" =
+    amyloid_suvr ~ log_ratio_ptau217_ab42 + Age + sex + apoe4_status
+)
+
+suvr_results <- list()
+suvr_plot_data <- list()
+
+for (nm in names(suvr_model_specs)) {
+  fit <- lm(suvr_model_specs[[nm]], data = all_data)
+  fit_sum <- summary(fit)
+  coef_table <- coef(fit_sum)
+  
+  # 自动识别 biomarker 主效应项
+  exclude_terms <- c("(Intercept)", "Age", "apoe4_status")
+  sex_terms <- grep("^sex", rownames(coef_table), value = TRUE)
+  exclude_terms <- c(exclude_terms, sex_terms)
+  
+  biomarker_row <- setdiff(rownames(coef_table), exclude_terms)[1]
+  
+  suvr_results[[nm]] <- data.frame(
+    Model = nm,
+    Term = biomarker_row,
+    Beta = coef_table[biomarker_row, "Estimate"],
+    SE = coef_table[biomarker_row, "Std. Error"],
+    t = coef_table[biomarker_row, "t value"],
+    P = coef_table[biomarker_row, "Pr(>|t|)"],
+    R2 = fit_sum$r.squared
+  )
+  
+  xvar <- all.vars(suvr_model_specs[[nm]])[2]
+  
+  suvr_plot_data[[nm]] <- all_data %>%
+    select(amyloid_suvr, amyloid_group, all_of(xvar)) %>%
+    rename(x = all_of(xvar)) %>%
+    mutate(Model = nm)
+}
+
+suvr_results <- bind_rows(suvr_results)
+suvr_plot_data <- bind_rows(suvr_plot_data)
+
+print(suvr_results)
+
+write_csv(suvr_results, "HABS_HD_SUVR_linear_results.csv")
+
+#========================================
+# 13. Figure 2 绘图
+#========================================
+
+pal_pet <- c("Aβ-" = "gray50", "Aβ+" = "#DD8452")
+
+plot_suvr_scatter <- function(data, result_table, model_name) {
+  subdat <- data %>% filter(Model == model_name)
+  subres <- result_table %>% filter(Model == model_name)
+  
+  ggplot(subdat, aes(x = x, y = amyloid_suvr, color = amyloid_group)) +
+    geom_point(alpha = 0.60, size = 1.6) +
+    geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 0.8) +
+    scale_color_manual(values = pal_pet) +
+    labs(
+      x = model_name,
+      y = "Aβ PET SUVR"
+    ) +
+    annotate(
+      "text",
+      x = Inf, y = Inf,
+      label = paste0(
+        "R² = ", sprintf("%.3f", subres$R2),
+        "\nP = ", format.pval(subres$P, digits = 2, eps = 0.001)
+      ),
+      hjust = 1.08, vjust = 1.5, size = 4
+    ) +
+    theme_classic(base_size = 13) +
+    theme(
+      legend.position = "none",
+      axis.text = element_text(color = "black"),
+      axis.title = element_text(color = "black"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+      axis.ticks = element_line(color = "black")
+    )
+}
+
+p1 <- plot_suvr_scatter(suvr_plot_data, suvr_results, "log(Aβ42)")
+p2 <- plot_suvr_scatter(suvr_plot_data, suvr_results, "log(Aβ42/40)")
+p3 <- plot_suvr_scatter(suvr_plot_data, suvr_results, "log(p-tau181)")
+p4 <- plot_suvr_scatter(suvr_plot_data, suvr_results, "log(p-tau181/Aβ42)")
+p5 <- plot_suvr_scatter(suvr_plot_data, suvr_results, "log(p-tau217)")
+p6 <- plot_suvr_scatter(suvr_plot_data, suvr_results, "log(p-tau217/Aβ42)")
+
+figure2 <- (
+  p1 + p2 + p3 +
+    p4 + p5 + p6
+) +
+  plot_layout(ncol = 3, nrow = 2) +
+  plot_annotation(tag_levels = "A") &
+  theme(
+    plot.tag = element_text(face = "bold", size = 14),
+    plot.tag.position = c(0.02, 0.98),
+    plot.margin = margin(5, 5, 5, 5)
+  )
+
+print(figure2)
+
+ggsave(
+  filename = "Figure2_HABS_HD_SUVR_2x3.pdf",
+  plot = figure2,
+  width = 14,
+  height = 9
+)
+
+ggsave(
+  filename = "Figure2_HABS_HD_SUVR_2x3.png",
+  plot = figure2,
+  width = 14,
+  height = 9,
+  dpi = 600
+)
+
+#========================================
+# 14. 可选：Centiloid 敏感性分析
+#========================================
+
+cl_data <- analysis_dat %>%
+  filter(!is.na(amyloid_cl))
+
+if (nrow(cl_data) > 0) {
+  cl_model_specs <- list(
+    "log(Aβ42)" =
+      amyloid_cl ~ log_abeta42 + Age + sex + apoe4_status,
+    
+    "log(Aβ42/40)" =
+      amyloid_cl ~ log_ratio_abeta42_40 + Age + sex + apoe4_status,
+    
+    "log(p-tau181)" =
+      amyloid_cl ~ log_ptau181 + Age + sex + apoe4_status,
+    
+    "log(p-tau181/Aβ42)" =
+      amyloid_cl ~ log_ratio_ptau181_ab42 + Age + sex + apoe4_status,
+    
+    "log(p-tau217)" =
+      amyloid_cl ~ log_ptau217 + Age + sex + apoe4_status,
+    
+    "log(p-tau217/Aβ42)" =
+      amyloid_cl ~ log_ratio_ptau217_ab42 + Age + sex + apoe4_status
+  )
+  
+  cl_results <- list()
+  
+  for (nm in names(cl_model_specs)) {
+    fit <- lm(cl_model_specs[[nm]], data = cl_data)
+    fit_sum <- summary(fit)
+    coef_table <- coef(fit_sum)
+    
+    exclude_terms <- c("(Intercept)", "Age", "apoe4_status")
+    sex_terms <- grep("^sex", rownames(coef_table), value = TRUE)
+    exclude_terms <- c(exclude_terms, sex_terms)
+    
+    biomarker_row <- setdiff(rownames(coef_table), exclude_terms)[1]
+    
+    cl_results[[nm]] <- data.frame(
+      Model = nm,
+      Term = biomarker_row,
+      Beta = coef_table[biomarker_row, "Estimate"],
+      SE = coef_table[biomarker_row, "Std. Error"],
+      t = coef_table[biomarker_row, "t value"],
+      P = coef_table[biomarker_row, "Pr(>|t|)"],
+      R2 = fit_sum$r.squared
+    )
+  }
+  
+  cl_results <- bind_rows(cl_results)
+  write_csv(cl_results, "HABS_HD_Centiloid_linear_results.csv")
+  print(cl_results)
+}
+
+cat("\nSaved files:\n")
+cat("- HABS_HD_analysis_dat_with_SUVR.csv\n")
+cat("- HABS_HD_SUVR_linear_results.csv\n")
+cat("- Figure2_HABS_HD_SUVR_2x3.pdf\n")
+cat("- Figure2_HABS_HD_SUVR_2x3.png\n")
+cat("- HABS_HD_Centiloid_linear_results.csv (if available)\n")
