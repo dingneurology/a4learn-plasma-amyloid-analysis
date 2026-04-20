@@ -416,3 +416,233 @@ cat("- HABS_HD_SUVR_linear_results.csv\n")
 cat("- Figure2_HABS_HD_SUVR_2x3.pdf\n")
 cat("- Figure2_HABS_HD_SUVR_2x3.png\n")
 cat("- HABS_HD_Centiloid_linear_results.csv (if available)\n")
+
+
+#========================================
+# 15. ROC analysis for HABS-HD
+#   outcome = amyloid_status
+#========================================
+
+library(pROC)
+
+roc_model_specs <- list(
+  "Combined model" =
+    amyloid_status ~ log_ptau217 + log_ptau181 + log_abeta42 + Age + sex + apoe4_status,
+  
+  "log(Aβ42/40) + covariates" =
+    amyloid_status ~ log_ratio_abeta42_40 + Age + sex + apoe4_status,
+  
+  "log(Aβ42) + covariates" =
+    amyloid_status ~ log_abeta42 + Age + sex + apoe4_status,
+  
+  "log(p-tau217) + covariates" =
+    amyloid_status ~ log_ptau217 + Age + sex + apoe4_status,
+  
+  "log(p-tau217/Aβ42) + covariates" =
+    amyloid_status ~ log_ratio_ptau217_ab42 + Age + sex + apoe4_status,
+  
+  "log(p-tau181) + covariates" =
+    amyloid_status ~ log_ptau181 + Age + sex + apoe4_status,
+  
+  "log(p-tau181/Aβ42) + covariates" =
+    amyloid_status ~ log_ratio_ptau181_ab42 + Age + sex + apoe4_status
+)
+
+roc_df_adj <- list()
+auc_table_adj <- list()
+roc_obj_list <- list()
+
+for (nm in names(roc_model_specs)) {
+  fit <- glm(roc_model_specs[[nm]], data = analysis_dat, family = binomial())
+  pred <- predict(fit, type = "response")
+  roc_obj <- roc(analysis_dat$amyloid_status, pred, quiet = TRUE)
+  ci_obj <- ci.auc(roc_obj)
+  
+  roc_obj_list[[nm]] <- roc_obj
+  
+  roc_df_adj[[nm]] <- data.frame(
+    specificity = roc_obj$specificities,
+    sensitivity = roc_obj$sensitivities,
+    feature = nm
+  )
+  
+  auc_table_adj[[nm]] <- data.frame(
+    Model = nm,
+    AUC = as.numeric(auc(roc_obj)),
+    CI_low = as.numeric(ci_obj[1]),
+    CI_high = as.numeric(ci_obj[3])
+  )
+}
+
+roc_df_adj <- bind_rows(roc_df_adj)
+auc_table_adj <- bind_rows(auc_table_adj)
+
+write_csv(auc_table_adj, "HABS_HD_ROC_AUC_results.csv")
+
+#========================================
+# 16. 固定模型顺序
+#========================================
+
+model_order <- c(
+  "Combined model",
+  "log(p-tau217) + covariates",
+  "log(p-tau217/Aβ42) + covariates",
+  "log(Aβ42/40) + covariates",
+  "log(p-tau181/Aβ42) + covariates",
+  "log(p-tau181) + covariates",
+  "log(Aβ42) + covariates"
+)
+
+roc_df_adj <- roc_df_adj %>%
+  mutate(feature = factor(feature, levels = model_order))
+
+auc_table_adj <- auc_table_adj %>%
+  mutate(Model = factor(Model, levels = model_order)) %>%
+  arrange(Model)
+
+#========================================
+# 17. 左侧 ROC 图
+#========================================
+
+colors_final <- c(
+  "Combined model" = "#1f77b4",
+  "log(Aβ42/40) + covariates" = "#17becf",
+  "log(Aβ42) + covariates" = "#2ca02c",
+  "log(p-tau217) + covariates" = "#9467bd",
+  "log(p-tau217/Aβ42) + covariates" = "#8c564b",
+  "log(p-tau181) + covariates" = "#7f7f7f",
+  "log(p-tau181/Aβ42) + covariates" = "#636363"
+)
+
+roc_plot_adj <- ggplot(
+  roc_df_adj,
+  aes(x = 1 - specificity, y = sensitivity, color = feature)
+) +
+  geom_step(linewidth = 0.9) +
+  geom_abline(
+    slope = 1, intercept = 0,
+    linetype = "dashed", color = "gray70"
+  ) +
+  scale_color_manual(
+    values = colors_final,
+    breaks = model_order
+  ) +
+  labs(
+    x = "1 - Specificity",
+    y = "Sensitivity",
+    color = NULL
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "none",
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(color = "black"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+    axis.ticks = element_line(color = "black")
+  ) +
+  coord_fixed(ratio = 1)
+
+#========================================
+library(dplyr)
+library(ggplot2)
+
+auc_plot_df <- auc_table_adj %>%
+  mutate(
+    Model = as.character(Model)
+  ) %>%
+  mutate(
+    model_label = case_when(
+      Model == "Combined model" ~ "Combined Model",
+      Model == "log(p-tau217) + covariates" ~ "P-tau217",
+      Model == "log(p-tau217/Aβ42) + covariates" ~ "P-tau217/Aβ42",
+      Model == "log(p-tau181/Aβ42) + covariates" ~ "P-tau181/Aβ42",
+      Model == "log(Aβ42/40) + covariates" ~ "Aβ42/40",
+      Model == "log(p-tau181) + covariates" ~ "P-tau181",
+      Model == "log(Aβ42) + covariates" ~ "Aβ42",
+      TRUE ~ Model
+    ),
+    group_type = ifelse(Model == "Combined model",
+                        "Combined Model",
+                        "Biomarker + covariates"),
+    auc_text = sprintf("%.3f (%.2f - %.2f)", AUC, CI_low, CI_high)
+  ) %>%
+  arrange(desc(AUC)) %>%
+  mutate(
+    model_label = factor(model_label, levels = rev(unique(model_label)))
+  )
+
+cols_auc <- c(
+  "Combined Model" = "#E67E22",
+  "Biomarker + covariates" = "#2E78B7"
+)
+
+p_auc_forest <- ggplot(
+  auc_plot_df,
+  aes(x = AUC, y = model_label, color = group_type)
+) +
+  geom_errorbarh(
+    aes(xmin = CI_low, xmax = CI_high),
+    height = 0.12,
+    linewidth = 2
+  ) +
+  geom_point(size = 6) +
+  
+  # 右侧数值列：放到框外
+  geom_text(
+    data = auc_plot_df,
+    aes(x = 1.115, y = model_label, label = auc_text),
+    inherit.aes = FALSE,
+    color = "black",
+    hjust = 0,
+    size = 7,
+    family = "serif"
+  ) +
+  
+  # 右侧标题：也放到框外
+  annotate(
+    "text",
+    x = 1.115,
+    y = length(levels(auc_plot_df$model_label)) + 0.7,
+    label = "AUC(95%CI)",
+    hjust = 0,
+    size = 9,
+    fontface = "bold",
+    family = "serif"
+  ) +
+  
+  scale_color_manual(values = cols_auc) +
+  scale_x_continuous(
+    limits = c(0.58, 1.02),   # 只让坐标轴到框边
+    breaks = c(0.6, 0.7, 0.8, 0.9),
+    expand = c(0, 0)
+  ) +
+  labs(
+    x = "AUC(95%CI)",
+    y = "Biomarker",
+    color = NULL
+  ) +
+  coord_cartesian(clip = "off") +   # 允许框外显示文字
+  theme_minimal(base_size = 22) +
+  theme(
+    panel.grid.major = element_line(color = "#D9D9D9", linewidth = 1.4),
+    panel.grid.minor = element_line(color = "#ECECEC", linewidth = 0.8),
+    panel.border = element_rect(color = "#2B1B17", linewidth = 2.2, fill = NA),
+    axis.title.x = element_text(face = "bold", size = 26, family = "serif", color = "black"),
+    axis.title.y = element_text(face = "bold", size = 26, family = "serif", color = "black"),
+    axis.text.x = element_text(size = 20, color = "black", family = "serif"),
+    axis.text.y = element_text(size = 20, color = "black", family = "serif", face = "bold"),
+    legend.position = c(0.66, 0.08),
+    legend.justification = c(0, 0),
+    legend.text = element_text(size = 18, family = "serif", face = "bold"),
+    legend.key = element_blank(),
+    plot.margin = margin(15, 260, 15, 15)   # 右侧留白加大
+  ) +
+  guides(
+    color = guide_legend(override.aes = list(size = 6))
+  )
+
+print(p_auc_forest)
+
+
+
+
