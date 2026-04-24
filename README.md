@@ -9,6 +9,7 @@ This repository contains analysis scripts for the study of plasma biomarkers and
 - ROC analysis
 - combined model analysis
 - figure generation
-
+- Replication(HABS-HD)
+- 
 ## Note
-The original A4/LEARN data are controlled-access and are not included in this repository.
+The original A4/LEARN and HABS-HD data are controlled-access and are not included in this repository.
